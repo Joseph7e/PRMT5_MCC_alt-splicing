@@ -1,0 +1,27 @@
+Process	Tool	Command	Notes
+			
+HiFi Reads			
+Read Segmentation	skera	skera split -j 72 hifi.bam kinnex8_segmentation_adapters.fasta segmented_run.bam	Run twice for each run.
+Merge two run BAMs	pbmerge	pbmerge -o combined-segmented.bam output-skera/segmented.bam output-skera-run2/segmented-run2.bam	
+Demultiplex into samples	lima	lima -j $threads --ignore-biosamples --isoseq --peek-guess --overwrite-biosample-names segmented.bam IsoSeq_v2_primers_12.fasta output.bam	removes barcoded iso-seq primers
+List of files for refinement		ls output-combined-demuxed/*.bam > demuxed-bams.fofn	
+Refinement	isoseq refine	isoseq3 refine demuxed-bams.fofn IsoSeq_v2_primers_12.fasta --require-polya flfn.bam -j 24	polyA trimming, concatemer removal
+Clustering	isoseq cluster2	isoseq cluster2 -j 24 flfn.bam clustered.bam	Generate hi-qual isoforms
+Map to reference	pbmm2	pbmm2 align --preset ISOSEQ --sort -j 24 $Ref_genome_fasta clustered.bam mapped.bam	
+Identify Unique Isoforms	isoseq collapse	isoseq collapse -j 24 --do-not-collapse-extra-5exons mapped.bam  flfn.bam collapsed.gff	flfn carries the counts
+Isoform Classification	pigeon	pigeon sort -o collapsed.sorted.gff collapsed.gff	
+		pigeon classify -j $threads --flnc collapsed.flnc_count.txt --poly-a polyA.txt --cage-peak TSS.bed -c $ref_junction collapsed.sorted.gff gencode.v38.gtf hg38.fa	classify into structural categories.
+		pigeon filter -j $threads --isoforms collapsed.sorted.gff collapsed_classification.txt	filter isofrms from artifacts.
+		pigeon report classification_filtered_lite_classification.txt	Do we have enough reads.
+		pigeon prepare gtf ref.fa cage.bed intropolis.tsv	validate inpout files before running.
+			
+Analysis Training	https://www.youtube.com/watch?v=0C3i1CH-5Hw		
+IsoSeq Primers	https://downloads.pacbcloud.com/public/dataset/Kinnex-full-length-RNA/REF-primers/		
+Segementation adapters	https://downloads.pacbcloud.com/public/dataset/MAS-Seq/REF-MAS_adapters/MAS-Seq_Adapter_v1/		
+Primers and adapters were obtained form Andrew Mason via email.			
+See 	https://isoseq.how/getting-started.html		
+			
+Isoseq collapse for multiple samples	https://github.com/PacificBiosciences/IsoSeq/blob/master/docs/clustering/examples.md		
+Pigeon genome files	https://downloads.pacbcloud.com/public/dataset/MAS-Seq/REF-pigeon_ref_sets/Human_hg38_Gencode_v39/		
+			
+			
