@@ -16,3 +16,10 @@ This repository includes scripts for analyzing **PRMT5-driven alternative splici
 
 ### **Contact**
 For questions of issues, please open an issue or contact joseph.sevigny@unh.edu
+
+
+### **Description of Files**
+ - 'pacbio-commands.txt' - a simple README file with the PACBIO isoseq workflow. This provides the BASH commands to create the read counts and isoform classifications starting from multiplexed PacBio HiFi reads.
+ - 'GSEA-plots.ipynb' - generates enrichment plots for GSEA analysis. Used for construction of Figure 2C. The input dataset is a CSV of GSEA results which includes fields for FDR q-val and NOM p-val.
+ - 'isoform-plots.ipynb' - generates Figures 3A, 3B and Figures EV4. The input to the script is a TSV file of the classifications produced by the pigeon report software.
+ - 'saturation-curve.ipynb' - generates a saturation curve for isoseq data. The input file is generated using the pigeon report function. This provides a TSV with the number of reads and identified genes/transcripts.
