@@ -1,0 +1,224 @@
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("tximport")
+BiocManager::install("DeSeq2")
+BiocManager::install("readr")
+BiocManager::install("dplyr")
+BiocManager::install("EnhancedVolcano")
+BiocManager::install("pheatmap")
+BiocManager::install("VennDiagram")
+BiocManager::install("")
+
+
+library("tximport")
+library("DESeq2")
+citation("DESeq2")
+version("DESeq2")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library(EnhancedVolcano)
+library(pheatmap)
+
+
+### IMPORT DATA
+
+setwd("deseq2-illumina/")
+getwd()
+
+# Define the sample names
+samples <- c("DMSO_1", "DMSO_2", "DMSO_3", "DMSO_4", "JNJ_5", "JNJ_6", "JNJ_7", "JNJ_8")
+
+# Define the directory containing each sample's quant.sf file
+quant_dirs <- file.path("quants", samples, "quant.sf")
+quant_dirs
+
+# Check if each file exists
+file.exists(quant_dirs)
+
+# Name the files vector with the sample names
+names(quant_dirs) <- samples
+
+# convert transcripts to gene level
+tx2gene <- read.delim("tx2gene_name.tsv", header = FALSE, col.names = c("TXNAME", "GENEID"), sep = " ")
+
+View(tx2gene)
+
+# import quants
+txi <- tximport(quant_dirs, type = "salmon", tx2gene = tx2gene)
+
+
+# CSV file with a simple sample,group
+metadata <- read.csv("metadata.csv", row.names = 1)
+
+dds <- DESeqDataSetFromTximport(txi, colData = metadata, design = ~ condition)
+
+# remove very lowly abundant genes
+nrow(dds)
+smallestGroupSize <- 3
+keep <- rowSums(counts(dds) >= 10) >= smallestGroupSize
+dds <- dds[keep,]
+nrow(dds)
+
+# run it!
+dds <- DESeq(dds)
+res <- results(dds)
+res
+
+
+ranked_list <- res$stat
+names(ranked_list) <- rownames(res)
+ranked_list <- ranked_list[!is.na(ranked_list)]
+write.table(ranked_list, file = "GSEA_ranked_list.rnk", sep = "\t", quote = FALSE, col.names = FALSE)
+
+
+# log fold change shinkage for visualization
+resultsNames(dds)
+resLFC <- lfcShrink(dds, coef="condition_treated_vs_control", type="apeglm")
+resLFC
+
+# raw data information (with wald)
+resOrdered <- res[order(res$pvalue),]
+summary(res)
+sum(res$padj < 0.1, na.rm=TRUE)
+
+
+# only 0.05 level ones
+res05 <- results(dds, alpha=0.05)
+summary(res05)
+
+
+
+# MA plot
+plotMA(resLFC, ylim = c(-5, 5))
+ggplot(as.data.frame(resLFC), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(aes(color = padj < 0.05), alpha = 0.5) +
+  scale_x_log10() +
+  theme_minimal() +
+  labs(x = "Mean expression (log scale)", y = "Log2 fold change", 
+       title = "MA plot for differential expression") +
+  theme(legend.position = "none")
+
+
+# Volcano
+# Volcano plot for visualizing DE results
+volcanoData <- as.data.frame(resLFC)
+volcanoData$significance <- ifelse(volcanoData$padj < 0.05, "Significant", "Not Significant")
+
+ggplot(volcanoData, aes(x = log2FoldChange, y = -log10(padj), color = significance)) +
+  geom_point(alpha = 0.6) +
+  theme_minimal() +
+  scale_color_manual(values = c("gray", "red")) +
+  labs(x = "Log2 fold change", y = "-Log10 adjusted p-value", 
+       title = "Volcano plot for differential expression")
+
+
+ggplot(as.data.frame(resLFC), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(aes(color = padj < 0.05), alpha = 0.5) +
+  scale_x_log10() +
+  scale_color_manual(values = c("gray", "red"), labels = c("Not Significant", "Significant")) +
+  theme_minimal() +
+  labs(x = "Mean expression (log scale)", y = "Log2 fold change", 
+       title = "MA plot for differential expression") +
+  theme(legend.title = element_blank())  # This removes the title of the legend
+
+```
+
+
+```{r}
+
+# Create the volcano plot
+EnhancedVolcano(resLFC,
+                lab = rownames(resLFC),            # Add gene names to labels
+                x = 'log2FoldChange',              # Log2 fold change values
+                y = 'padj',                        # Adjusted p-values
+                pCutoff = 0.05,                    # Cutoff for significance (adjusted p-value)
+                FCcutoff = 1,                      # Cutoff for fold change (absolute value)
+                pointSize = 3,                     # Size of the points
+                labSize = 3,                       # Size of the labels
+                colAlpha = 0.7,                    # Transparency for points
+                title = "Volcano plot of DEGs",    # Plot title
+                subtitle = "Log2 fold change vs. -log10 adjusted p-value", # Subtitle
+                caption = "p-value cutoff = 0.05, FC cutoff = 1", # Caption
+                col = c('gray', 'green', 'red'),   # Colors for points: non-significant, downregulated, upregulated
+                legendPosition = "top",            # Position of legend
+                legendLabSize = 10,                # Legend label size
+                drawConnectors = TRUE,             # Draw lines connecting labels to points
+                widthConnectors = 0.5,             # Width of connector lines
+                maxoverlap = 10                    # Max number of overlapping labels to show
+)
+
+
+EnhancedVolcano(resLFC,
+  lab = rownames(resLFC),
+  x = 'log2FoldChange',
+  y = 'pvalue')
+
+
+
+# Save the plot as a PNG file with a specified size
+ggsave("volcano_plot.png", plot = last_plot(), width = 10, height = 8, dpi = 300)
+
+# save data
+topGenes <- head(order(resLFC$padj), 50)
+rld <- rlog(dds)
+heatmapData <- assay(rld)[topGenes,]
+annotation_col <- as.data.frame(colData(dds)["condition"])
+
+# Save the heatmap to a file (e.g., PNG) with larger dimensions and higher resolution
+png("heatmap.png", width = 2400, height = 1800, res = 300)  # Larger width and height, 300 dpi
+
+# Generate the heatmap with smaller y-axis and x-axis labels
+pheatmap(heatmapData, cluster_rows = TRUE, cluster_cols = TRUE, 
+         show_rownames = TRUE, show_colnames = TRUE, 
+         annotation_col = annotation_col, 
+         fontsize_row = 8,  # Reduce row label size (y-axis)
+         fontsize_col = 8,  # Reduce column label size (x-axis)
+         fontsize = 12)     # Main font size for titles/annotations
+
+# Close the device to save the plot
+dev.off()
+
+
+
+
+# Filter for upregulated genes (positive log2 fold change)
+upregulatedGenes <- resLFC[resLFC$log2FoldChange > 2, ]
+
+# Order upregulated genes by adjusted p-value (ascending)
+upregulatedGenes <- upregulatedGenes[order(upregulatedGenes$padj), ]
+
+# Select top 50 upregulated genes
+topGenes <- head(rownames(upregulatedGenes), 50)
+
+# Perform rlog transformation
+rld <- rlog(dds)
+
+# Extract heatmap data for the top upregulated genes
+heatmapData <- assay(rld)[topGenes,]
+
+# Prepare the annotation for the heatmap
+annotation_col <- as.data.frame(colData(dds)["condition"])
+
+# Save the heatmap to a file (e.g., PNG) with larger dimensions and higher resolution
+png("heatmap_upregulated_genes.png", width = 2400, height = 1800, res = 300)  # Larger width and height, 300 dpi
+
+# Generate the heatmap with smaller y-axis and x-axis labels
+pheatmap(heatmapData, cluster_rows = TRUE, cluster_cols = TRUE, 
+         show_rownames = TRUE, show_colnames = TRUE, 
+         annotation_col = annotation_col, 
+         fontsize_row = 8,  # Reduce row label size (y-axis)
+         fontsize_col = 8,  # Reduce column label size (x-axis)
+         fontsize = 12)     # Main font size for titles/annotations
+
+# Close the device to save the plot
+dev.off()
+
+
+# 4. Write DE results to CSV
+write.csv(as.data.frame(resLFC), "DESeq2_results_shrunk.csv")
+
+# 5. Filter significant genes
+sigGenes <- subset(resLFC, padj < 0.05 & abs(log2FoldChange) > 1)
+write.csv(as.data.frame(sigGenes), "significant_genes.csv")

@@ -1,0 +1,147 @@
+library("tximport")
+library("DESeq2")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library(EnhancedVolcano)
+library(pheatmap)
+
+### IMPORT DATA
+
+getwd()
+setwd("deseq2-pacbio")
+
+# Define the sample names
+samples <- c("DMSO_1", "DMSO_2", "DMSO_3", "DMSO_4", "JNJ_5", "JNJ_6", "JNJ_7", "JNJ_8")
+
+samples
+
+# import data
+#countData <- read.table("counts-matrix-gene-aggregate.tsv", header = TRUE, row.names = 1, sep = "\t")
+countData <- read.table("counts-isoforms.tsv", header = TRUE, row.names = 1, sep = "\t")
+
+#pacbio_cpm <- cpm(countData, log=TRUE)  # log-transformed CPM
+
+View(countData)
+
+# CSV file with a simple sample,group
+metadata <- read.csv("../metadata.csv", row.names = 1)
+
+#RUn DESEQ2
+dds <- DESeqDataSetFromMatrix(countData = countData, colData = metadata, design = ~ condition)
+
+# remove very lowly abundant genes
+nrow(dds)
+smallestGroupSize <- 3
+keep <- rowSums(counts(dds) >= 5) >= smallestGroupSize
+dds <- dds[keep,]
+nrow(dds)
+
+# run it!
+dds <- DESeq(dds)
+res <- results(dds)
+res
+
+
+
+resultsNames(dds)
+resLFC <- lfcShrink(dds, coef="condition_treated_vs_control", type="apeglm")
+resLFC
+
+# raw data information (with wald)
+resOrdered <- res[order(res$pvalue),]
+summary(res)
+sum(res$padj < 0.1, na.rm=TRUE)
+
+
+# only 0.05 level ones
+res05 <- results(dds, alpha=0.05)
+summary(res05)
+
+# only 0.05 level ones
+res01 <- results(dds, alpha=0.01)
+summary(res01)
+
+
+# MA plot
+plotMA(resLFC, ylim = c(-5, 5))
+ggplot(as.data.frame(resLFC), aes(x = baseMean, y = log2FoldChange)) +
+  geom_point(aes(color = padj < 0.05), alpha = 0.5) +
+  scale_x_log10() +
+  theme_minimal() +
+  labs(x = "Mean expression (log scale)", y = "Log2 fold change", 
+       title = "MA plot for differential expression") +
+  theme(legend.position = "none")
+
+
+# Volcano
+# Volcano plot for visualizing DE results
+volcanoData <- as.data.frame(resLFC)
+volcanoData$significance <- ifelse(volcanoData$padj < 0.05, "Significant", "Not Significant")
+
+ggplot(volcanoData, aes(x = log2FoldChange, y = -log10(padj), color = significance)) +
+  geom_point(alpha = 0.6) +
+  theme_minimal() +
+  scale_color_manual(values = c("gray", "red")) +
+  labs(x = "Log2 fold change", y = "-Log10 adjusted p-value", 
+       title = "Volcano plot for differential expression")
+
+
+
+
+resNorm <- lfcShrink(dds, coef=2, type="normal")
+resAsh <- lfcShrink(dds, coef=2, type="ashr")
+par(mfrow=c(1,3), mar=c(4,4,2,1))
+xlim <- c(1,1e5); ylim <- c(-3,3)
+plotMA(resLFC, xlim=xlim, ylim=ylim, main="apeglm")
+plotMA(resNorm, xlim=xlim, ylim=ylim, main="normal")
+plotMA(resAsh, xlim=xlim, ylim=ylim, main="ashr")
+
+EnhancedVolcano(resLFC,
+                lab = rownames(resLFC),            # Add gene names to labels
+                x = 'log2FoldChange',              # Log2 fold change values
+                y = 'padj',                        # Adjusted p-values
+                pCutoff = 0.05,                    # Cutoff for significance (adjusted p-value)
+                FCcutoff = 1,                      # Cutoff for fold change (absolute value)
+                pointSize = 3,                     # Size of the points
+                labSize = 3,                       # Size of the labels
+                colAlpha = 0.7,                    # Transparency for points
+                title = "Volcano plot of DEGs",    # Plot title
+                subtitle = "Log2 fold change vs. -log10 adjusted p-value", # Subtitle
+                caption = "p-value cutoff = 0.05, FC cutoff = 1", # Caption
+                col = c('gray', 'green', 'red'),   # Colors for points: non-significant, downregulated, upregulated
+                legendPosition = "top",            # Position of legend
+                legendLabSize = 10,                # Legend label size
+                drawConnectors = TRUE,             # Draw lines connecting labels to points
+                widthConnectors = 0.5,             # Width of connector lines
+                maxoverlap = 10                    # Max number of overlapping labels to show
+)
+
+# Save the plot as a PNG file with a specified size
+ggsave("volcano_plot_isoforms.png", plot = last_plot(), width = 10, height = 8, dpi = 300)
+
+topGenes <- head(order(resLFC$padj), 50)
+rld <- rlog(dds)
+heatmapData <- assay(rld)[topGenes,]
+annotation_col <- as.data.frame(colData(dds)["condition"])
+
+# Save the heatmap to a file (e.g., PNG) with larger dimensions and higher resolution
+png("heatmap_isoforms.png", width = 2400, height = 1800, res = 300)  # Larger width and height, 300 dpi
+
+# Generate the heatmap with smaller y-axis and x-axis labels
+pheatmap(heatmapData, cluster_rows = TRUE, cluster_cols = TRUE, 
+         show_rownames = TRUE, show_colnames = TRUE, 
+         annotation_col = annotation_col, 
+         fontsize_row = 8,  # Reduce row label size (y-axis)
+         fontsize_col = 8,  # Reduce column label size (x-axis)
+         fontsize = 12)     # Main font size for titles/annotations
+
+# Close the device to save the plot
+dev.off()
+
+# 4. Write DE results to CSV
+write.csv(as.data.frame(resLFC), "DESeq2_results_shrunk_isoforms.csv")
+
+# 5. Filter significant genes
+sigGenes <- subset(resLFC, padj < 0.05 & abs(log2FoldChange) > 1)
+write.csv(as.data.frame(sigGenes), "significant_genes_isoforms.csv")

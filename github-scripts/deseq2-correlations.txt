@@ -1,0 +1,277 @@
+library("tximport")
+library("DESeq2")
+library("readr")
+library("dplyr")
+library("ggplot2")
+library(EnhancedVolcano)
+library(pheatmap)
+base <- getwd()
+metadata_path <- file.path(base, "..", "metadata.csv")
+illumina_tx <- file.path(base, "tx2gene_name.tsv")
+pacbio_path <- file.path(base, "counts-matrix-gene-aggregate.tsv")
+
+# CSV file with a simple sample,group
+metadata <- read.csv(metadata_path, row.names = 1)
+
+
+# Define the sample names
+samples <- c("DMSO_1", "DMSO_2", "DMSO_3", "DMSO_4", "JNJ_5", "JNJ_6", "JNJ_7", "JNJ_8")
+
+##################
+
+## import illumina data
+
+# Define the directory containing each sample's quant.sf file
+quant_dirs <- file.path(base, "../deseq2-illumina/quants", samples, "quant.sf")
+
+
+# Name the files vector with the sample names
+names(quant_dirs) <- samples
+
+# convert transcripts to gene level
+tx2gene <- read.delim(illumina_tx, header = FALSE, col.names = c("TXNAME", "GENEID"), sep = " ")
+
+# import quants
+txi <- tximport(quant_dirs, type = "salmon", tx2gene = tx2gene)
+
+
+# create object
+dds_illumina <- DESeqDataSetFromTximport(txi, colData = metadata, design = ~ condition)
+
+# remove very lowly abundant genes
+nrow(dds_illumina)
+smallestGroupSize <- 3
+keep <- rowSums(counts(dds_illumina) >= 10) >= smallestGroupSize
+dds_illumina <- dds_illumina[keep,]
+nrow(dds_illumina)
+
+# run it
+dds_illumina <- DESeq(dds_illumina)
+
+
+#################################################
+## import pacbio data
+
+# import data
+
+countData <- read.table(pacbio_path, header = TRUE, row.names = 1, sep = "\t")
+
+#Run DESEQ2
+dds_pacbio <- DESeqDataSetFromMatrix(countData = countData, colData = metadata, design = ~ condition)
+
+# remove very lowly abundant genes
+nrow(dds_pacbio)
+smallestGroupSize <- 3
+keep_pacbio <- rowSums(counts(dds_pacbio) >= 5) >= smallestGroupSize
+dds_pacbio <- dds_pacbio[keep_pacbio,]
+nrow(dds_pacbio)
+
+dds_pacbio <- DESeq(dds_pacbio)
+
+
+###
+#perform spearman and pearson correlations
+
+# Extract normalized counts
+norm_counts_pacbio <- counts(dds_pacbio, normalized = TRUE)
+norm_counts_illumina <- counts(dds_illumina, normalized = TRUE)
+
+
+# Convert to log2 scale (add 1 to avoid log(0))
+log2_counts_illumina <- log2(norm_counts_illumina + 1)
+log2_counts_pacbio <- log2(norm_counts_pacbio + 1)
+
+# Find common genes
+common_genes <- intersect(rownames(log2_counts_illumina), rownames(log2_counts_pacbio))
+
+common_genes
+
+# Subset to only common genes
+log2_counts_illumina <- log2_counts_illumina[common_genes, ]
+log2_counts_pacbio <- log2_counts_pacbio[common_genes, ]
+
+# Compute mean expression per gene across samples
+illumina_mean <- rowMeans(log2_counts_illumina)
+pacbio_mean <- rowMeans(log2_counts_pacbio)
+
+# Compute correlations
+pearson_cor <- cor(illumina_mean, pacbio_mean, method = "pearson")
+spearman_cor <- cor(illumina_mean, pacbio_mean, method = "spearman")
+
+# Print results
+print(paste("Pearson correlation:", round(pearson_cor, 3)))
+print(paste("Spearman correlation:", round(spearman_cor, 3)))
+
+# Create data frame for plotting
+correlation_df <- data.frame(Illumina = illumina_mean, PacBio = pacbio_mean)
+
+# Generate scatter plot
+ggplot(correlation_df, aes(x = Illumina, y = PacBio)) +
+  geom_point(alpha = 0.5, color = "blue") +  # Scatter plot points
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +  # Linear regression line
+  labs(title = "Gene Expression Correlation: PacBio vs. Illumina",
+       subtitle = paste("Pearson:", round(pearson_cor, 3), "| Spearman:", round(spearman_cor, 3)),
+       x = "Log2 Normalized Expression (Illumina)",
+       y = "Log2 Normalized Expression (PacBio)") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        plot.subtitle = element_text(size = 12, color = "darkred"))
+
+######
+# Retrieve normalized counts from DESeq2 objects (no need for further normalization)
+norm_counts_illumina <- counts(dds_illumina, normalized = TRUE)
+norm_counts_pacbio <- counts(dds_pacbio, normalized = TRUE)
+
+# Log2-transform normalized counts (optional)
+log2_counts_illumina <- log2(norm_counts_illumina + 1)  # add 1 to avoid log(0)
+log2_counts_pacbio <- log2(norm_counts_pacbio + 1)
+
+##########################
+# Separate data by condition (control and treated)
+dds_illumina_control <- dds_illumina[, metadata$condition == "control"]
+dds_illumina_treated <- dds_illumina[, metadata$condition == "treated"]
+dds_pacbio_control <- dds_pacbio[, metadata$condition == "control"]
+dds_pacbio_treated <- dds_pacbio[, metadata$condition == "treated"]
+
+# Extract normalized counts for each condition
+norm_counts_illumina_control <- counts(dds_illumina_control, normalized = TRUE)
+norm_counts_illumina_treated <- counts(dds_illumina_treated, normalized = TRUE)
+norm_counts_pacbio_control <- counts(dds_pacbio_control, normalized = TRUE)
+norm_counts_pacbio_treated <- counts(dds_pacbio_treated, normalized = TRUE)
+
+# Log2-transform for correlation analysis
+log2_counts_illumina_control <- log2(norm_counts_illumina_control + 1)
+log2_counts_illumina_treated <- log2(norm_counts_illumina_treated + 1)
+log2_counts_pacbio_control <- log2(norm_counts_pacbio_control + 1)
+log2_counts_pacbio_treated <- log2(norm_counts_pacbio_treated + 1)
+
+##########################
+# Find common genes between Illumina and PacBio
+common_genes_control <- intersect(rownames(log2_counts_illumina_control), rownames(log2_counts_pacbio_control))
+common_genes_treated <- intersect(rownames(log2_counts_illumina_treated), rownames(log2_counts_pacbio_treated))
+
+# Subset to only common genes
+log2_counts_illumina_control <- log2_counts_illumina_control[common_genes_control, ]
+log2_counts_pacbio_control <- log2_counts_pacbio_control[common_genes_control, ]
+log2_counts_illumina_treated <- log2_counts_illumina_treated[common_genes_treated, ]
+log2_counts_pacbio_treated <- log2_counts_pacbio_treated[common_genes_treated, ]
+
+##########################
+# Compute mean expression per gene across samples within each condition
+illumina_mean_control <- rowMeans(log2_counts_illumina_control)
+pacbio_mean_control <- rowMeans(log2_counts_pacbio_control)
+illumina_mean_treated <- rowMeans(log2_counts_illumina_treated)
+pacbio_mean_treated <- rowMeans(log2_counts_pacbio_treated)
+
+##########################
+# Compute Pearson and Spearman correlations for each condition
+pearson_cor_control <- cor(illumina_mean_control, pacbio_mean_control, method = "pearson")
+spearman_cor_control <- cor(illumina_mean_control, pacbio_mean_control, method = "spearman")
+
+pearson_cor_treated <- cor(illumina_mean_treated, pacbio_mean_treated, method = "pearson")
+spearman_cor_treated <- cor(illumina_mean_treated, pacbio_mean_treated, method = "spearman")
+
+# Print results for each condition
+cat("Control Condition:\n")
+print(paste("Pearson correlation:", round(pearson_cor_control, 3)))
+print(paste("Spearman correlation:", round(spearman_cor_control, 3)))
+
+cat("\nTreated Condition:\n")
+print(paste("Pearson correlation:", round(pearson_cor_treated, 3)))
+print(paste("Spearman correlation:", round(spearman_cor_treated, 3)))
+
+##########################
+# Create data frames for plotting
+correlation_df_control <- data.frame(Illumina = illumina_mean_control, PacBio = pacbio_mean_control)
+correlation_df_treated <- data.frame(Illumina = illumina_mean_treated, PacBio = pacbio_mean_treated)
+
+# Plot results for control and treated conditions
+library(ggplot2)
+
+ggplot(correlation_df_control, aes(x = Illumina, y = PacBio)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  labs(title = "Gene Expression Correlation: PacBio vs. Illumina (Control)",
+       subtitle = paste("Pearson:", round(pearson_cor_control, 3), "| Spearman:", round(spearman_cor_control, 3)),
+       x = "Log2 Normalized Expression (Illumina)",
+       y = "Log2 Normalized Expression (PacBio)") +
+  theme_minimal()
+
+ggplot(correlation_df_treated, aes(x = Illumina, y = PacBio)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  labs(title = "Gene Expression Correlation: PacBio vs. Illumina (Treated)",
+       subtitle = paste("Pearson:", round(pearson_cor_treated, 3), "| Spearman:", round(spearman_cor_treated, 3)),
+       x = "Log2 Normalized Expression (Illumina)",
+       y = "Log2 Normalized Expression (PacBio)") +
+  theme_minimal()
+
+
+# Create the plot
+plot <- ggplot(correlation_df_treated, aes(x = Illumina, y = PacBio)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  labs(title = "Gene Expression Correlation: Treated",
+       subtitle = paste("Pearson:", round(pearson_cor_treated, 3), "| Spearman:", round(spearman_cor_treated, 3)),
+       x = "Log2 Normalized Expression (Illumina)",
+       y = "Log2 Normalized Expression (PacBio)") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    plot.subtitle = element_text(size = 16),
+    axis.title.x = element_text(size = 20),
+    axis.title.y = element_text(size = 20),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16)
+  )+
+  scale_x_continuous(expand = c(0, 0)) +  # Removes padding around the x-axis
+  scale_y_continuous(expand = c(0, 0))    # Removes padding around the y-axis
+
+# Save the plot with increased resolution
+ggsave("correlation_plot.png", plot = plot, dpi = 300, width = 8, height = 6)
+
+
+# Create the plot
+plot <- ggplot(correlation_df_control, aes(x = Illumina, y = PacBio)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", color = "red", linetype = "dashed") +
+  labs(title = "Gene Expression Correlation: Control",
+       subtitle = paste("Pearson:", round(pearson_cor_control, 3), "| Spearman:", round(spearman_cor_control, 3)),
+       x = "Log2 Normalized Expression (Illumina)",
+       y = "Log2 Normalized Expression (PacBio)") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 20, face = "bold"),
+    plot.subtitle = element_text(size = 16),
+    axis.title.x = element_text(size = 20),
+    axis.title.y = element_text(size = 20),
+    axis.text.x = element_text(size = 16),
+    axis.text.y = element_text(size = 16)
+  )+
+  scale_x_continuous(expand = c(0, 0)) +  # Removes padding around the x-axis
+  scale_y_continuous(expand = c(0, 0))    # Removes padding around the y-axis
+
+# Save the plot with increased resolution
+ggsave("correlation_plot_control.png", plot = plot, dpi = 300, width = 8, height = 6)
+
+##########
+### DIfferential Expression
+
+# Run differential expression analysis on Illumina data
+res_illumina <- results(dds_illumina)
+
+# Filter for significant genes (adjust p-value < 0.05)
+sig_illumina <- res_illumina[which(res_illumina$padj < 0.05), ]
+
+# View significant results
+head(sig_illumina)
+
+
+# Run differential expression analysis on PacBio data
+res_pacbio <- results(dds_pacbio)
+
+# Filter for significant genes (adjust p-value < 0.05)
+sig_pacbio <- res_pacbio[which(res_pacbio$padj < 0.05), ]
+
+# View significant results
+head(sig_pacbio)
