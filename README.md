@@ -1,7 +1,7 @@
 # PRMT5_MCC_alt-splicing  
 
 This repository contains scripts related to the manuscript:  
-**"PRMT5-dependent SRSF1 modification drives Tip60-EP400 complex oncogenic activity through exon inclusion."**  
+**"Protein Arginine Methyltransferase 5 Sustains Tip60-EP400 Complex via SRSF1 in Merkel Cell Carcinoma."**  by Joseph L. Sevigny, Evelyn Proctor, Heather Adams, Erin MacDonald, WK Thomas, and Jingwei Cheng. Published in Life Science Alliance.
 
 ## Overview  
 This repository includes scripts for analyzing **PRMT5-driven alternative splicing** in **Merkel cell carcinoma (MCC)**. The analyses focus on:  
